@@ -6,7 +6,7 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
-    "opencode-membrain": "./dist/cli.js"
+    "opencode-membrain": "dist/cli.js"
   },
   "scripts": {
     "build": "bun build ./src/index.ts --outdir ./dist --target node && bun build ./src/cli.ts --outfile ./dist/cli.js --target node && tsc --emitDeclarationOnly",
@@ -31,7 +31,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Alphanimble/opencode-membrain"
+    "url": "git+https://github.com/Alphanimble/opencode-membrain.git"
   },
   "publishConfig": {
     "access": "public"
