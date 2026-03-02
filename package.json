@@ -1,0 +1,49 @@
+{
+  "name": "opencode-membrain",
+  "version": "1.0.0",
+  "description": "OpenCode plugin for persistent memory using Mem-Brain - an agentic memory system with semantic search and graph relationships",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "opencode-membrain": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "bun build ./src/index.ts --outdir ./dist --target node && bun build ./src/cli.ts --outfile ./dist/cli.js --target node && tsc --emitDeclarationOnly",
+    "dev": "tsc --watch",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "opencode",
+    "plugin",
+    "membrain",
+    "memory",
+    "ai",
+    "coding-agent",
+    "semantic-search",
+    "graph-memory"
+  ],
+  "author": "Mem-Brain",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Alphanimble/opencode-membrain"
+  },
+  "dependencies": {
+    "@opencode-ai/plugin": "^1.0.162"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.7.3"
+  },
+  "opencode": {
+    "type": "plugin",
+    "hooks": [
+      "chat.message",
+      "event"
+    ]
+  },
+  "files": [
+    "dist"
+  ]
+}
