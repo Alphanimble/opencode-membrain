@@ -11,7 +11,11 @@
   "scripts": {
     "build": "bun build ./src/index.ts --outdir ./dist --target node && bun build ./src/cli.ts --outfile ./dist/cli.js --target node && tsc --emitDeclarationOnly",
     "dev": "tsc --watch",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "bun run build",
+    "release:patch": "npm version patch && git push && git push --tags",
+    "release:minor": "npm version minor && git push && git push --tags",
+    "release:major": "npm version major && git push && git push --tags"
   },
   "keywords": [
     "opencode",
@@ -28,6 +32,9 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/Alphanimble/opencode-membrain"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "dependencies": {
     "@opencode-ai/plugin": "^1.0.162"

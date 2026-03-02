@@ -201,6 +201,42 @@ bun run build
 bun run typecheck
 ```
 
+## Publishing
+
+This plugin is published to npm and installable with:
+
+```bash
+bunx opencode-membrain@latest install --no-tui
+```
+
+### One-time setup
+
+1. Create an npm automation token at npmjs.com
+2. In GitHub repo settings, add secret `NPM_TOKEN`
+3. Ensure `package.json` version is bumped before release
+
+### Release flow (recommended)
+
+Tag-based publishing is automated via GitHub Actions.
+
+```bash
+# patch release (1.0.0 -> 1.0.1)
+bun run release:patch
+
+# minor release (1.0.0 -> 1.1.0)
+bun run release:minor
+
+# major release (1.0.0 -> 2.0.0)
+bun run release:major
+```
+
+Each command creates a git tag (`vX.Y.Z`) and pushes it.  
+The workflow `.github/workflows/publish.yml` then:
+
+1. Installs dependencies
+2. Typechecks and builds
+3. Publishes to npm (skips if that version already exists)
+
 Local install:
 
 ```jsonc
