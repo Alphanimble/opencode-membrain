@@ -389,8 +389,9 @@ The keywordFilter parameter accepts regex patterns for powerful tag-based filter
   - Auto-tags: scope.project + full temporal tags (year/month/date/weekday/week/quarter/season/time-of-day)
   - Tags: scope.X, type.Y, domain.Z, tech.W, etc.
 
-- **search**: Find memories by semantic similarity (query required). Use keywordFilter for tag filtering.
+- **search**: Find memories by semantic similarity (query required). Use keywordFilter for tag filtering. responseFormat: raw (default), interpreted (LLM summary), or both.
   - Example: membrain(mode: "search", query: "authentication", keywordFilter: "jwt|oauth", k: 5)
+  - Example: membrain(mode: "search", query: "What does the user prefer?", responseFormat: "interpreted")
 
 - **get**: Retrieve specific memories by ID(s) (memoryId or memoryIds - comma-separated or array)
   - Example: membrain(mode: "get", memoryIds: ["abc-123", "def-456"])
@@ -461,6 +462,7 @@ membrain(mode: "search", query: "design patterns I should know", keywordFilter: 
           category: tool.schema.string().optional(),
           k: tool.schema.number().optional(),
           keywordFilter: tool.schema.union([tool.schema.string(), tool.schema.array(tool.schema.string())]).optional(),
+          responseFormat: tool.schema.enum(["raw", "interpreted", "both"]).optional(),
           dryRun: tool.schema.boolean().optional(),
         },
         async execute(args: {
@@ -473,6 +475,7 @@ membrain(mode: "search", query: "design patterns I should know", keywordFilter: 
           category?: string;
           k?: number;
           keywordFilter?: string | string[];
+          responseFormat?: "raw" | "interpreted" | "both";
           dryRun?: boolean;
         }) {
           if (!isConfigured()) {
@@ -504,14 +507,13 @@ membrain(mode: "search", query: "design patterns I should know", keywordFilter: 
                     },
                     {
                       command: "search",
-                      description: "Search memories by semantic similarity with optional regex tag filtering",
-                      args: ["query (required)", "k? (default: 5)", "keywordFilter? (regex pattern)"],
+                      description: "Search memories by semantic similarity. responseFormat: raw (default), interpreted (LLM summary), or both.",
+                      args: ["query (required)", "k? (default: 5)", "keywordFilter? (regex)", "responseFormat? (raw|interpreted|both)"],
                       examples: [
                         'membrain(mode: "search", query: "react components", k: 3)',
+                        'membrain(mode: "search", query: "What does the user prefer?", responseFormat: "interpreted")',
                         'membrain(mode: "search", query: "authentication methods", keywordFilter: "jwt|oauth", k: 5)',
-                        'membrain(mode: "search", query: "database options", keywordFilter: "mongo|postgre|redis|sql|nosql", k: 10)',
-                        'membrain(mode: "search", query: "architecture patterns", keywordFilter: "microservices|event-driven|ddd", k: 5)',
-                        'membrain(mode: "search", query: "design patterns", keywordFilter: "solid|factory|singleton|observer", k: 10)',
+                        'membrain(mode: "search", query: "database options", responseFormat: "both")',
                       ],
                     },
                     {
@@ -633,45 +635,100 @@ membrain(mode: "search", query: "design patterns I should know", keywordFilter: 
                 }
 
                 const k = args.k || 5;
-                const result = await membrainClient.searchMemories(args.query, k, args.keywordFilter);
+                const responseFormat = args.responseFormat || "raw";
 
-                if (!result.success) {
+                const envelope = await membrainClient.searchMemoriesResponse(
+                  args.query,
+                  k,
+                  args.keywordFilter,
+                  responseFormat,
+                );
+
+                if (responseFormat === "interpreted" || responseFormat === "both") {
+                  const parts: string[] = [];
+                  if (envelope.interpreted_error) {
+                    parts.push(`⚠ Interpreted summary unavailable: ${envelope.interpreted_error}`);
+                  }
+                  if (envelope.interpreted) {
+                    parts.push("--- Interpreted Summary ---");
+                    parts.push(`Answer: ${envelope.interpreted.answer_summary ?? "N/A"}`);
+                    parts.push(`Confidence: ${envelope.interpreted.confidence ?? "N/A"}`);
+                    if (envelope.interpreted.key_facts?.length) {
+                      parts.push("", "Key Facts:");
+                      for (const f of envelope.interpreted.key_facts) parts.push(`  • ${f}`);
+                    }
+                    if (envelope.interpreted.important_relationships?.length) {
+                      parts.push("", "Relationships:");
+                      for (const r of envelope.interpreted.important_relationships) parts.push(`  • ${r}`);
+                    }
+                    if (envelope.interpreted.conflicts_or_uncertainties?.length) {
+                      parts.push("", "Conflicts/Uncertainties:");
+                      for (const c of envelope.interpreted.conflicts_or_uncertainties) parts.push(`  ⚠ ${c}`);
+                    }
+                  }
+                  if (responseFormat === "both" || (envelope.interpreted_error && envelope.results.length > 0)) {
+                    parts.push("", "--- Raw Evidence ---");
+                  }
+                  if (envelope.results.length > 0) {
+                    const formattedRaw = envelope.results.map((m, i) => {
+                      if (m.type === "memory_node") {
+                        const sim = m.semantic_score != null ? Math.round(m.semantic_score * 100) : 0;
+                        return `${i + 1}. ${m.content?.slice(0, 150) ?? "[No content]"}... (${sim}%)`;
+                      }
+                      const edge = m as import("./types/index.js").RelationshipEdgeResult;
+                      return `${i + 1}. Relationship: ${edge.description || "N/A"} (${edge.score != null ? Math.round(edge.score * 100) : 0}%)`;
+                    });
+                    parts.push(`Found ${envelope.count} results:\n${formattedRaw.join("\n")}`);
+                  }
+                  if (parts.length === 0 && envelope.results.length === 0) {
+                    return JSON.stringify({
+                      success: true,
+                      query: args.query,
+                      interpreted_error: envelope.interpreted_error,
+                      message: "No memories found matching the query.",
+                    });
+                  }
                   return JSON.stringify({
-                    success: false,
-                    error: result.error || "Failed to search memories",
+                    success: true,
+                    query: args.query,
+                    responseFormat,
+                    interpreted: envelope.interpreted,
+                    interpreted_error: envelope.interpreted_error,
+                    formatted: parts.join("\n"),
+                    count: envelope.count,
+                    results: envelope.results.map((m) => {
+                      if (m.type === "memory_node") {
+                        return { id: m.id, content: m.content?.slice(0, 200), similarity: m.semantic_score, type: "memory" };
+                      }
+                      const edge = m as import("./types/index.js").RelationshipEdgeResult;
+                      return { id: edge.id, content: `Relationship: ${edge.description}`, similarity: edge.score, type: "relationship" };
+                    }),
                   });
                 }
 
-                const memories = result.data || [];
-                
-                // Format results based on type (memory_node vs relationship_edge)
+                // raw format (existing behavior)
+                const memories = envelope.results;
                 const formattedResults = memories.map((m) => {
                   if (m.type === "memory_node") {
-                    // Memory node result
                     return {
                       id: m.id,
                       content: m.content ? m.content.slice(0, 200) + (m.content.length > 200 ? "..." : "") : "[No content]",
-                      similarity: m.semantic_score !== undefined && m.semantic_score !== null 
-                        ? Math.round(m.semantic_score * 100) 
-                        : 0,
+                      similarity: m.semantic_score != null ? Math.round(m.semantic_score * 100) : 0,
                       tags: m.tags || [],
                       type: "memory",
                     };
                   }
-                  // relationship_edge type
                   return {
                     id: m.id,
                     content: `Relationship: ${m.description || "N/A"}`,
-                    similarity: m.score !== undefined && m.score !== null 
-                      ? Math.round(m.score * 100) 
-                      : 0,
+                    similarity: m.score != null ? Math.round(m.score * 100) : 0,
                     tags: [],
                     type: "relationship",
                     source: m.source?.content?.slice(0, 50),
                     target: m.target?.content?.slice(0, 50),
                   };
                 });
-                
+
                 return JSON.stringify({
                   success: true,
                   query: args.query,

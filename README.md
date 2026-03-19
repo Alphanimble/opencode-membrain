@@ -115,7 +115,7 @@ The `membrain` tool is available to the agent:
 | Mode | Args | Description |
 |------|------|-------------|
 | `add` | `content`, `tags?` | Store a new memory (Guardian decides update vs create) |
-| `search` | `query`, `k?` | Search memories with semantic similarity |
+| `search` | `query`, `k?`, `responseFormat?` (raw\|interpreted\|both) | Search memories with semantic similarity. Use `interpreted` for LLM summary, `both` for summary + evidence. |
 | `get` | `memoryId` | Retrieve a specific memory with its linked neighbors |
 | `delete` | `memoryId` | Delete a memory |
 | `stats` | - | View memory system statistics |

@@ -1,11 +1,51 @@
 import { getMembrainConfig } from "../config.js";
-import type { Memory, SearchResult, MemoryStats, MembrainResponse, DeleteResult } from "../types/index.js";
+import type {
+  Memory,
+  SearchResult,
+  MemoryStats,
+  MembrainResponse,
+  DeleteResult,
+  ResponseFormat,
+  SearchResponseEnvelope,
+} from "../types/index.js";
 import { log } from "./logger.js";
 
 interface ApiRequestOptions {
   method?: string;
   body?: unknown;
   headers?: Record<string, string>;
+}
+
+interface IngestJobAcceptedResponse {
+  status: "accepted";
+  job_id: string;
+  job_status: "queued" | "processing";
+  status_url: string;
+  created_at: string;
+}
+
+interface IngestJobErrorResponse {
+  code: string;
+  message: string;
+  retryable?: boolean;
+}
+
+interface IngestJobStatusResponse {
+  job_id: string;
+  status: "queued" | "processing" | "completed" | "failed";
+  created_at: string;
+  started_at?: string;
+  completed_at?: string;
+  result?: {
+    memory_id: string;
+    action: "created" | "updated";
+    memory?: Memory;
+  };
+  error?: IngestJobErrorResponse;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function apiRequest<T>(endpoint: string, options: ApiRequestOptions = {}): Promise<MembrainResponse<T>> {
@@ -56,6 +96,46 @@ async function apiRequest<T>(endpoint: string, options: ApiRequestOptions = {}):
 }
 
 export const membrainClient = {
+  async waitForIngestJob(jobId: string): Promise<MembrainResponse<{ memory_id: string; action: "created" | "updated"; memory?: Memory }>> {
+    const maxAttempts = 120;
+    const delayMs = 500;
+
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      const response = await apiRequest<IngestJobStatusResponse>(`/memories/jobs/${jobId}`, {
+        method: "GET",
+      });
+
+      if (!response.success || !response.data) {
+        return {
+          success: false,
+          error: response.error ?? `Failed to poll ingest job ${jobId}`,
+        };
+      }
+
+      if (response.data.status === "completed" && response.data.result) {
+        return {
+          success: true,
+          data: response.data.result,
+        };
+      }
+
+      if (response.data.status === "failed") {
+        const error = response.data.error;
+        return {
+          success: false,
+          error: error ? `${error.code}: ${error.message}` : `Ingest job ${jobId} failed`,
+        };
+      }
+
+      await sleep(delayMs);
+    }
+
+    return {
+      success: false,
+      error: `Timed out waiting for ingest job ${jobId}`,
+    };
+  },
+
   async addMemory(content: string, tags: string[] = [], category?: string): Promise<MembrainResponse<Memory> & { action?: "created" | "updated" }> {
     const body: Record<string, unknown> = {
       content,
@@ -66,10 +146,19 @@ export const membrainClient = {
       body.category = category;
     }
     
-    const response = await apiRequest<{ memory_id: string; action: "created" | "updated"; memory: Memory }>("/memories", {
+    const accepted = await apiRequest<IngestJobAcceptedResponse>("/memories", {
       method: "POST",
       body,
     });
+
+    if (!accepted.success || !accepted.data) {
+      return {
+        success: false,
+        error: accepted.error,
+      };
+    }
+
+    const response = await this.waitForIngestJob(accepted.data.job_id);
     
     log("addMemory", { success: response.success, id: response.data?.memory_id, action: response.data?.action, category });
     
@@ -81,32 +170,78 @@ export const membrainClient = {
     };
   },
 
-  async searchMemories(query: string, k: number = 5, keywordFilter?: string | string[]): Promise<MembrainResponse<SearchResult[]>> {
+  async searchMemories(
+    query: string,
+    k: number = 5,
+    keywordFilter?: string | string[],
+  ): Promise<MembrainResponse<SearchResult[]>> {
     const body: Record<string, unknown> = {
       query,
       k,
+      response_format: "raw",
     };
-    
-    if (keywordFilter) {
-      body.keyword_filter = keywordFilter;
-    }
-    
-    const response = await apiRequest<{ results: SearchResult[] }>("/memories/search", {
-      method: "POST",
-      body,
-    });
-    
-    log("searchMemories", { 
-      success: response.success, 
+    if (keywordFilter) body.keyword_filter = keywordFilter;
+
+    const response = await apiRequest<{ results: SearchResult[] }>(
+      "/memories/search",
+      { method: "POST", body },
+    );
+
+    log("searchMemories", {
+      success: response.success,
       query: query.slice(0, 50),
-      keywordFilter: typeof keywordFilter === 'string' ? keywordFilter : keywordFilter?.join(','),
-      count: response.data?.results?.length 
+      count: response.data?.results?.length,
     });
-    
+
     return {
       success: response.success,
       data: response.data?.results,
       error: response.error,
+    };
+  },
+
+  async searchMemoriesResponse(
+    query: string,
+    k: number = 5,
+    keywordFilter?: string | string[],
+    responseFormat: ResponseFormat = "raw",
+  ): Promise<SearchResponseEnvelope> {
+    const body: Record<string, unknown> = {
+      query,
+      k,
+      response_format: responseFormat,
+    };
+
+    if (keywordFilter) {
+      body.keyword_filter = keywordFilter;
+    }
+
+    const response = await apiRequest<{
+      count: number;
+      results: SearchResult[];
+      interpreted?: import("../types/index.js").InterpretedSummary;
+      interpreted_error?: string;
+    }>("/memories/search", {
+      method: "POST",
+      body,
+    });
+
+    log("searchMemoriesResponse", {
+      success: response.success,
+      query: query.slice(0, 50),
+      responseFormat,
+      count: response.data?.results?.length,
+    });
+
+    if (!response.success || !response.data) {
+      throw new Error(response.error ?? "Search request failed");
+    }
+
+    return {
+      count: response.data.count ?? response.data.results?.length ?? 0,
+      results: response.data.results ?? [],
+      interpreted: response.data.interpreted,
+      interpreted_error: response.data.interpreted_error,
     };
   },
 

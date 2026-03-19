@@ -80,6 +80,28 @@ export interface RelationshipEdgeResult {
 // Union type for search results
 export type SearchResult = MemoryNodeResult | RelationshipEdgeResult;
 
+// Search response format
+export type ResponseFormat = "raw" | "interpreted" | "both";
+
+// Interpreted summary from API
+export interface InterpretedSummary {
+  answer_summary?: string;
+  key_facts?: string[];
+  important_relationships?: string[];
+  conflicts_or_uncertainties?: string[];
+  supporting_memory_ids?: string[];
+  supporting_edge_ids?: string[];
+  confidence?: string;
+}
+
+// Full search response envelope
+export interface SearchResponseEnvelope {
+  count: number;
+  results: SearchResult[];
+  interpreted?: InterpretedSummary;
+  interpreted_error?: string;
+}
+
 // Helper to check if result is a memory node
 export function isMemoryNode(result: SearchResult): result is MemoryNodeResult {
   return result.type === "memory_node";
