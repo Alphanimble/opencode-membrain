@@ -100,6 +100,8 @@ export interface SearchResponseEnvelope {
   results: SearchResult[];
   interpreted?: InterpretedSummary;
   interpreted_error?: string;
+  /** Echoed when the request used scope_regex */
+  scope_regex?: string | null;
 }
 
 // Helper to check if result is a memory node

@@ -1,6 +1,6 @@
 {
   "name": "opencode-membrain",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "description": "OpenCode plugin for persistent memory using Mem-Brain - an agentic memory system with semantic search and graph relationships",
   "type": "module",
   "main": "dist/index.js",

@@ -10,6 +10,7 @@ import { createCompactionHook, type CompactionContext } from "./services/compact
 
 import { isConfigured, getMembrainConfig } from "./config.js";
 import { log } from "./services/logger.js";
+import type { SearchResponseEnvelope } from "./types/index.js";
 
 const CODE_BLOCK_PATTERN = /```[\s\S]*?```/g;
 const INLINE_CODE_PATTERN = /`[^`]+`/g;
@@ -453,15 +454,20 @@ membrain(mode: "search", query: "design patterns I should know", keywordFilter: 
 8. **Use descriptive content**: Make memories self-explanatory
 9. **Add scope tags**: Distinguish user preferences vs project config`,
         args: {
-          mode: tool.schema.enum(["add", "search", "get", "delete", "cleanup", "stats", "help"]).optional(),
+          mode: tool.schema.enum(["add", "search", "get", "delete", "cleanup", "stats", "traverse", "help"]).optional(),
           content: tool.schema.string().optional(),
           query: tool.schema.string().optional(),
+          startMemoryId: tool.schema.string().optional(),
           memoryId: tool.schema.string().optional(),
           memoryIds: tool.schema.union([tool.schema.string(), tool.schema.array(tool.schema.string())]).optional(),
           tags: tool.schema.array(tool.schema.string()).optional(),
           category: tool.schema.string().optional(),
+          ingestionScope: tool.schema.string().optional(),
           k: tool.schema.number().optional(),
           keywordFilter: tool.schema.union([tool.schema.string(), tool.schema.array(tool.schema.string())]).optional(),
+          scopeRegex: tool.schema.string().optional(),
+          maxHops: tool.schema.number().optional(),
+          edgeSimilarityThreshold: tool.schema.number().optional(),
           responseFormat: tool.schema.enum(["raw", "interpreted", "both"]).optional(),
           dryRun: tool.schema.boolean().optional(),
         },
@@ -469,12 +475,17 @@ membrain(mode: "search", query: "design patterns I should know", keywordFilter: 
           mode?: string;
           content?: string;
           query?: string;
+          startMemoryId?: string;
           memoryId?: string;
           memoryIds?: string | string[];
           tags?: string[];
           category?: string;
+          ingestionScope?: string;
           k?: number;
           keywordFilter?: string | string[];
+          scopeRegex?: string;
+          maxHops?: number;
+          edgeSimilarityThreshold?: number;
           responseFormat?: "raw" | "interpreted" | "both";
           dryRun?: boolean;
         }) {
@@ -498,22 +509,33 @@ membrain(mode: "search", query: "design patterns I should know", keywordFilter: 
                     {
                       command: "add",
                       description: "Store a memory. Guardian automatically decides update vs create.",
-                      args: ["content (required)", "tags?", "category?"],
+                      args: ["content (required)", "tags?", "category?", "ingestionScope? (optional tag regex for merge/link candidates only)"],
                       examples: [
                         'membrain(mode: "add", content: "User prefers dark mode", tags: ["preference", "ui"])',
                         'membrain(mode: "add", content: "Uses React 18 with TypeScript", tags: ["project", "frontend", "react"], category: "tech")',
                         'membrain(mode: "add", content: "API rate limit is 1000 requests/hour", tags: ["project", "api", "config"])',
+                        'membrain(mode: "add", content: "New fact", tags: ["scope.project"], ingestionScope: "scope\\\\.project")',
                       ],
                     },
                     {
                       command: "search",
-                      description: "Search memories by semantic similarity. responseFormat: raw (default), interpreted (LLM summary), or both.",
-                      args: ["query (required)", "k? (default: 5)", "keywordFilter? (regex)", "responseFormat? (raw|interpreted|both)"],
+                      description: "Search memories by semantic similarity. responseFormat: raw (default), interpreted (LLM summary), or both. Use either keywordFilter OR scopeRegex (shared subgraph with ingest/traverse).",
+                      args: ["query (required)", "k? (default: 5)", "keywordFilter? (regex)", "scopeRegex? (single pattern)", "responseFormat? (raw|interpreted|both)"],
                       examples: [
                         'membrain(mode: "search", query: "react components", k: 3)',
                         'membrain(mode: "search", query: "What does the user prefer?", responseFormat: "interpreted")',
                         'membrain(mode: "search", query: "authentication methods", keywordFilter: "jwt|oauth", k: 5)',
+                        'membrain(mode: "search", query: "project facts", scopeRegex: "scope\\\\.project", k: 5)',
                         'membrain(mode: "search", query: "database options", responseFormat: "both")',
+                      ],
+                    },
+                    {
+                      command: "traverse",
+                      description: "Semantic graph traversal from a start memory along edges whose descriptions match the query (edge similarity threshold + hop limit). Optional scopeRegex on tags.",
+                      args: ["startMemoryId (required)", "query (required)", "maxHops? (1-5)", "edgeSimilarityThreshold? (0-1)", "scopeRegex?"],
+                      examples: [
+                        'membrain(mode: "traverse", startMemoryId: "abc-123", query: "authentication and authorization")',
+                        'membrain(mode: "traverse", startMemoryId: "abc-123", query: "compliance", maxHops: 3, edgeSimilarityThreshold: 0.8)',
                       ],
                     },
                     {
@@ -605,7 +627,8 @@ membrain(mode: "search", query: "design patterns I should know", keywordFilter: 
                 const result = await membrainClient.addMemory(
                   sanitizedContent,
                   [...new Set(autoTags)],
-                  args.category
+                  args.category,
+                  args.ingestionScope,
                 );
 
                 if (!result.success) {
@@ -637,12 +660,21 @@ membrain(mode: "search", query: "design patterns I should know", keywordFilter: 
                 const k = args.k || 5;
                 const responseFormat = args.responseFormat || "raw";
 
-                const envelope = await membrainClient.searchMemoriesResponse(
-                  args.query,
-                  k,
-                  args.keywordFilter,
-                  responseFormat,
-                );
+                let envelope: SearchResponseEnvelope;
+                try {
+                  envelope = await membrainClient.searchMemoriesResponse(
+                    args.query,
+                    k,
+                    args.keywordFilter,
+                    responseFormat,
+                    args.scopeRegex,
+                  );
+                } catch (err) {
+                  return JSON.stringify({
+                    success: false,
+                    error: err instanceof Error ? err.message : String(err),
+                  });
+                }
 
                 if (responseFormat === "interpreted" || responseFormat === "both") {
                   const parts: string[] = [];
@@ -733,8 +765,45 @@ membrain(mode: "search", query: "design patterns I should know", keywordFilter: 
                   success: true,
                   query: args.query,
                   keywordFilter: args.keywordFilter,
+                  scopeRegex: envelope.scope_regex ?? args.scopeRegex,
                   count: memories.length,
                   results: formattedResults,
+                });
+              }
+
+              case "traverse": {
+                if (!args.startMemoryId?.trim() || !args.query?.trim()) {
+                  return JSON.stringify({
+                    success: false,
+                    error: "startMemoryId and query are required for traverse mode",
+                  });
+                }
+
+                const tr = await membrainClient.traverseGraph(
+                  args.startMemoryId.trim(),
+                  args.query.trim(),
+                  {
+                    maxHops: args.maxHops,
+                    edgeSimilarityThreshold: args.edgeSimilarityThreshold,
+                    scopeRegex: args.scopeRegex,
+                  },
+                );
+
+                if (!tr.success || !tr.data) {
+                  return JSON.stringify({
+                    success: false,
+                    error: tr.error || "Traverse failed",
+                  });
+                }
+
+                return JSON.stringify({
+                  success: true,
+                  start_memory_id: args.startMemoryId,
+                  query: args.query,
+                  total_memories: tr.data.total_memories,
+                  total_edges: tr.data.total_edges,
+                  memories: tr.data.memories,
+                  traversed_edges: tr.data.traversed_edges,
                 });
               }
 

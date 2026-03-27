@@ -136,7 +136,12 @@ export const membrainClient = {
     };
   },
 
-  async addMemory(content: string, tags: string[] = [], category?: string): Promise<MembrainResponse<Memory> & { action?: "created" | "updated" }> {
+  async addMemory(
+    content: string,
+    tags: string[] = [],
+    category?: string,
+    ingestionScope?: string,
+  ): Promise<MembrainResponse<Memory> & { action?: "created" | "updated" }> {
     const body: Record<string, unknown> = {
       content,
       tags,
@@ -144,6 +149,9 @@ export const membrainClient = {
     
     if (category) {
       body.category = category;
+    }
+    if (ingestionScope && ingestionScope.trim()) {
+      body.ingestion_scope = ingestionScope.trim();
     }
     
     const accepted = await apiRequest<IngestJobAcceptedResponse>("/memories", {
@@ -174,13 +182,26 @@ export const membrainClient = {
     query: string,
     k: number = 5,
     keywordFilter?: string | string[],
+    scopeRegex?: string,
   ): Promise<MembrainResponse<SearchResult[]>> {
+    const kwSet =
+      keywordFilter != null &&
+      (Array.isArray(keywordFilter) ? keywordFilter.length > 0 : String(keywordFilter).trim() !== "");
+    const scSet = scopeRegex != null && String(scopeRegex).trim() !== "";
+    if (kwSet && scSet) {
+      return {
+        success: false,
+        error: "Provide only one of keywordFilter or scopeRegex",
+      };
+    }
     const body: Record<string, unknown> = {
       query,
       k,
       response_format: "raw",
     };
-    if (keywordFilter) body.keyword_filter = keywordFilter;
+    const sr = scopeRegex?.trim();
+    if (sr) body.scope_regex = sr;
+    else if (keywordFilter) body.keyword_filter = keywordFilter;
 
     const response = await apiRequest<{ results: SearchResult[] }>(
       "/memories/search",
@@ -205,14 +226,25 @@ export const membrainClient = {
     k: number = 5,
     keywordFilter?: string | string[],
     responseFormat: ResponseFormat = "raw",
+    scopeRegex?: string,
   ): Promise<SearchResponseEnvelope> {
+    const kwSet =
+      keywordFilter != null &&
+      (Array.isArray(keywordFilter) ? keywordFilter.length > 0 : String(keywordFilter).trim() !== "");
+    const scSet = scopeRegex != null && String(scopeRegex).trim() !== "";
+    if (kwSet && scSet) {
+      throw new Error("Provide only one of keywordFilter or scopeRegex");
+    }
     const body: Record<string, unknown> = {
       query,
       k,
       response_format: responseFormat,
     };
 
-    if (keywordFilter) {
+    const sr = scopeRegex?.trim();
+    if (sr) {
+      body.scope_regex = sr;
+    } else if (keywordFilter) {
       body.keyword_filter = keywordFilter;
     }
 
@@ -221,6 +253,7 @@ export const membrainClient = {
       results: SearchResult[];
       interpreted?: import("../types/index.js").InterpretedSummary;
       interpreted_error?: string;
+      scope_regex?: string | null;
     }>("/memories/search", {
       method: "POST",
       body,
@@ -242,6 +275,52 @@ export const membrainClient = {
       results: response.data.results ?? [],
       interpreted: response.data.interpreted,
       interpreted_error: response.data.interpreted_error,
+      scope_regex: response.data.scope_regex,
+    };
+  },
+
+  async traverseGraph(
+    startMemoryId: string,
+    query: string,
+    options?: {
+      maxHops?: number;
+      edgeSimilarityThreshold?: number;
+      scopeRegex?: string;
+    },
+  ): Promise<
+    MembrainResponse<{
+      memories: unknown[];
+      traversed_edges: unknown[];
+      total_memories?: number;
+      total_edges?: number;
+    }>
+  > {
+    const params = new URLSearchParams({
+      start_memory_id: startMemoryId,
+      query,
+      max_hops: String(options?.maxHops ?? 2),
+      edge_similarity_threshold: String(options?.edgeSimilarityThreshold ?? 0.7),
+    });
+    const scope = options?.scopeRegex?.trim();
+    if (scope) params.set("scope_regex", scope);
+
+    const response = await apiRequest<{
+      memories: unknown[];
+      traversed_edges: unknown[];
+      total_memories?: number;
+      total_edges?: number;
+    }>(`/graph/traverse?${params.toString()}`, { method: "GET" });
+
+    if (!response.success || !response.data) {
+      return {
+        success: false,
+        error: response.error ?? "Traverse failed",
+      };
+    }
+
+    return {
+      success: true,
+      data: response.data,
     };
   },
 
