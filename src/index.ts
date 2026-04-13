@@ -30,22 +30,21 @@ The user is sharing information that should be remembered. You MUST use the \`me
 - Errors and solutions ("The fix was...", "This error means...")
 - Configuration details ("API key is...", "Port is...", "Database is...")
 
-**Tag Guidelines:**
-- scope: user | project (auto-added)
-- type: preference | project-config | architecture | learned-pattern | error-solution | decision
-- domain: frontend | backend | devops | database | security | api | ui
-- tech: react | nodejs | docker | typescript | etc.
+**Scope token guidelines (stored on each memory, regex-capable):**
+- Always include a scope dimension such as \`scope.user\` or \`scope.project\` (project is defaulted when omitted)
+- Add type/domain/tech tokens: \`type.preference\`, \`domain.frontend\`, \`tech.react\`, etc.
+- Temporal tokens are auto-added (\`time.year.2026\`, \`time.date.YYYY-MM-DD\`, …)
 
 **Examples of good memories:**
-- "User prefers dark mode in all applications" → tags: ["scope.user", "type.preference", "domain.ui"]
-- "Build command: bun run build && bun test" → tags: ["scope.project", "type.project-config", "domain.devops"]
-- "Uses PostgreSQL with pgvector extension" → tags: ["scope.project", "type.project-config", "domain.database"]
-- "Never use \`any\` type - strict TypeScript" → tags: ["scope.project", "type.conventions", "tech.typescript"]
-- "Database migrations must be backward compatible" → tags: ["scope.project", "type.best-practice", "domain.database"]
+- "User prefers dark mode in all applications" → scope: ["scope.user", "type.preference", "domain.ui"]
+- "Build command: bun run build && bun test" → scope: ["scope.project", "type.project-config", "domain.devops"]
+- "Uses PostgreSQL with pgvector extension" → scope: ["scope.project", "type.project-config", "domain.database"]
+- "Never use \`any\` type - strict TypeScript" → scope: ["scope.project", "type.conventions", "tech.typescript"]
+- "Database migrations must be backward compatible" → scope: ["scope.project", "type.best-practice", "domain.database"]
 
 **Format:**
 \`\`\`
-membrain(mode: "add", content: "CONCISE FACT HERE", tags: ["scope.X", "type.Y", "domain.Z"])
+membrain(mode: "add", content: "CONCISE FACT HERE", scope: ["scope.X", "type.Y", "domain.Z"])
 \`\`\`
 
 **DO NOT skip this step. The user explicitly wants you to remember this information.**`;
@@ -174,6 +173,16 @@ function buildTemporalTags(now: Date): string[] {
   }
 
   return [...new Set(temporalTags)];
+}
+
+function normalizeScopeArg(scope?: string | string[]): string[] | undefined {
+  if (scope == null) return undefined;
+  if (Array.isArray(scope)) {
+    const out = scope.map((s) => String(s).trim()).filter(Boolean);
+    return out.length ? out : undefined;
+  }
+  const t = String(scope).trim();
+  return t ? [t] : undefined;
 }
 
 export const MembrainPlugin: Plugin = async (ctx: PluginInput) => {
@@ -361,44 +370,32 @@ export const MembrainPlugin: Plugin = async (ctx: PluginInput) => {
 3. STORE FACTS - When user shares preferences/facts/decisions, save as atomic notes
 4. REVIEW CONNECTIONS - Check linked memories for insights
 
-## ADVANCED SEARCH WITH REGEX FILTERING
+## SCOPE FILTERING (SEARCH / TRAVERSE / BULK DELETE)
 
-The keywordFilter parameter accepts regex patterns for powerful tag-based filtering:
+The optional \`scope\` argument is a list of **PostgreSQL regex** patterns with **AND** semantics: every pattern must match at least one scope token on the memory (or link endpoints for graph results).
 
 ### Examples:
-- Single tag: keywordFilter: "react"
-- Multiple tags (OR): keywordFilter: "react|vue|angular"
-- Pattern matching: keywordFilter: "micro*" (matches microservices)
-- Complex regex: keywordFilter: "^[a-z]+(-[a-z]+)+$" (hyphenated tags)
-- Combined search: keywordFilter: "frontend|backend|api"
+- Single token: \`scope: ["scope\\\\.project"]\`
+- OR inside one pattern: \`scope: ["type\\\\.(preference|project-config)"]\`
+- Multiple AND patterns: \`scope: ["scope\\\\.project", "domain\\\\.frontend"]\`
 
-### Use Cases:
-- Search all database technologies: keywordFilter: "mongo|postgre|redis"
-- Find architecture patterns: keywordFilter: "microservices|event-driven|ddd"
-- Filter by scope: keywordFilter: "scope.user|scope.project"
-- Temporal search: keywordFilter: "time.2024|time.2023"
-
-### Pro Tips:
-- Use | for OR operations
-- Use * for wildcards
-- Use ^ and $ for exact matches
-- Combine with semantic query for precision
+Combine with the semantic \`query\` for precision.
 
 ## MODES
 
 - **add**: Store a memory (content required). Guardian decides update vs create.
-  - Auto-tags: scope.project + full temporal tags (year/month/date/weekday/week/quarter/season/time-of-day)
-  - Tags: scope.X, type.Y, domain.Z, tech.W, etc.
+  - Auto scope: \`scope.project\` when no \`scope.*\` token is provided, plus full temporal \`time.*\` tokens
+  - You may pass extra \`scope\` tokens (type, domain, tech, …)
 
-- **search**: Find memories by semantic similarity (query required). Use keywordFilter for tag filtering. responseFormat: raw (default), interpreted (LLM summary), or both.
-  - Example: membrain(mode: "search", query: "authentication", keywordFilter: "jwt|oauth", k: 5)
+- **search**: Semantic search (\`query\` required). Optional \`scope\` filter. \`responseFormat\`: raw (default), interpreted, or both.
+  - Example: membrain(mode: "search", query: "authentication", scope: ["tech\\\\.(jwt|oauth)"], k: 5)
   - Example: membrain(mode: "search", query: "What does the user prefer?", responseFormat: "interpreted")
 
 - **get**: Retrieve specific memories by ID(s) (memoryId or memoryIds - comma-separated or array)
   - Example: membrain(mode: "get", memoryIds: ["abc-123", "def-456"])
 
-- **delete**: Remove by ID OR by tags/category filters
-  - Example: membrain(mode: "delete", tags: ["temp"])
+- **delete**: Remove by ID OR by \`scope\` / \`category\` filters (bulk uses API AND semantics on scope)
+  - Example: membrain(mode: "delete", scope: ["temp"])
   - Example: membrain(mode: "delete", category: "draft")
 
 - **cleanup**: Find and remove empty/low-quality memories
@@ -408,51 +405,42 @@ The keywordFilter parameter accepts regex patterns for powerful tag-based filter
 - **stats**: View memory system statistics
   - Example: membrain(mode: "stats")
 
-## TAG STRATEGY
+## SCOPE STRATEGY
 
-### Auto-Added Tags (on memory creation):
-- scope.project (default when no explicit scope tag is provided)
-- Temporal tags: time.year.YYYY, time.YYYY, time.month.YYYY-MM, time.month.<name>, time.date.YYYY-MM-DD, time.weekday.<name>, time.week.YYYY-WW, time.QN, time.<timeofday>, time.season.<name>
+### Auto-added on add (when you omit explicit \`scope.project\` / \`scope.user\`):
+- \`scope.project\` by default
+- Temporal tokens: \`time.year.YYYY\`, \`time.date.YYYY-MM-DD\`, \`time.weekday.*\`, etc.
 
-### Recommended Tag Categories:
+### Recommended dimensions (same string tokens as before; they live in \`scope\`):
 - **Type**: preference, project-config, architecture, learned-pattern, error-solution, decision
 - **Domain**: frontend, backend, devops, database, security, api, ui
 - **Technology**: react, nodejs, typescript, docker, kubernetes, etc.
-- **Status**: active, archived, deprecated, draft
-- **Priority**: high, medium, low
 
 ### Examples:
-- membrain(mode: "add", content: "Uses React with TypeScript", tags: ["type.project-config", "domain.frontend", "tech.react", "tech.typescript"])
-- membrain(mode: "add", content: "User prefers dark mode", tags: ["type.preference", "domain.ui"])
+- membrain(mode: "add", content: "Uses React with TypeScript", scope: ["type.project-config", "domain.frontend", "tech.react", "tech.typescript"])
+- membrain(mode: "add", content: "User prefers dark mode", scope: ["type.preference", "domain.ui"])
 
 ## REAL-WORLD EXAMPLES
 
-// Find all frontend technologies
-membrain(mode: "search", query: "frontend frameworks", keywordFilter: "react|vue|angular", k: 10)
+membrain(mode: "search", query: "frontend frameworks", scope: ["tech\\\\.(react|vue|angular)"], k: 10)
 
-// Search authentication methods
-membrain(mode: "search", query: "how to authenticate users", keywordFilter: "jwt|oauth|security", k: 5)
+membrain(mode: "search", query: "how to authenticate users", scope: ["domain\\\\.security", "tech\\\\.(jwt|oauth)"], k: 5)
 
-// Find database options
-membrain(mode: "search", query: "database for my project", keywordFilter: "mongo|postgre|redis|sql|nosql", k: 10)
+membrain(mode: "search", query: "database for my project", scope: ["domain\\\\.database"], k: 10)
 
-// Architecture patterns
-membrain(mode: "search", query: "scaling strategy", keywordFilter: "microservices|kubernetes|load-balancing", k: 5)
-
-// Design patterns
-membrain(mode: "search", query: "design patterns I should know", keywordFilter: "ddd|solid|factory|singleton|observer", k: 10)
+membrain(mode: "traverse", startMemoryId: "abc-123", query: "scaling and infra", scope: ["scope\\\\.project"])
 
 ## BEST PRACTICES
 
 1. **Use atomic notes**: One fact per memory
-2. **Tag consistently**: Use same tags for similar concepts
+2. **Scope consistently**: Reuse the same tokens for similar concepts
 3. **Search before adding**: Avoid duplicates by checking first
-4. **Use regex filters**: Narrow results precisely with keywordFilter
+4. **Use scope regex thoughtfully**: AND across patterns; use \`|\` inside a pattern for OR
 5. **Trust the Guardian**: Let it handle auto-linking
 6. **Review connections**: Check linked neighbors for insights
 7. **Clean up regularly**: Remove outdated or empty memories with cleanup mode
 8. **Use descriptive content**: Make memories self-explanatory
-9. **Add scope tags**: Distinguish user preferences vs project config`,
+9. **Separate user vs project**: Prefer \`scope.user\` vs \`scope.project\``,
         args: {
           mode: tool.schema.enum(["add", "search", "get", "delete", "cleanup", "stats", "traverse", "help"]).optional(),
           content: tool.schema.string().optional(),
@@ -460,12 +448,9 @@ membrain(mode: "search", query: "design patterns I should know", keywordFilter: 
           startMemoryId: tool.schema.string().optional(),
           memoryId: tool.schema.string().optional(),
           memoryIds: tool.schema.union([tool.schema.string(), tool.schema.array(tool.schema.string())]).optional(),
-          tags: tool.schema.array(tool.schema.string()).optional(),
+          scope: tool.schema.union([tool.schema.string(), tool.schema.array(tool.schema.string())]).optional(),
           category: tool.schema.string().optional(),
-          ingestionScope: tool.schema.string().optional(),
           k: tool.schema.number().optional(),
-          keywordFilter: tool.schema.union([tool.schema.string(), tool.schema.array(tool.schema.string())]).optional(),
-          scopeRegex: tool.schema.string().optional(),
           maxHops: tool.schema.number().optional(),
           edgeSimilarityThreshold: tool.schema.number().optional(),
           responseFormat: tool.schema.enum(["raw", "interpreted", "both"]).optional(),
@@ -478,12 +463,9 @@ membrain(mode: "search", query: "design patterns I should know", keywordFilter: 
           startMemoryId?: string;
           memoryId?: string;
           memoryIds?: string | string[];
-          tags?: string[];
+          scope?: string | string[];
           category?: string;
-          ingestionScope?: string;
           k?: number;
-          keywordFilter?: string | string[];
-          scopeRegex?: string;
           maxHops?: number;
           edgeSimilarityThreshold?: number;
           responseFormat?: "raw" | "interpreted" | "both";
@@ -509,30 +491,29 @@ membrain(mode: "search", query: "design patterns I should know", keywordFilter: 
                     {
                       command: "add",
                       description: "Store a memory. Guardian automatically decides update vs create.",
-                      args: ["content (required)", "tags?", "category?", "ingestionScope? (optional tag regex for merge/link candidates only)"],
+                      args: ["content (required)", "scope? (token list; also narrows merge/link candidates)", "category?"],
                       examples: [
-                        'membrain(mode: "add", content: "User prefers dark mode", tags: ["preference", "ui"])',
-                        'membrain(mode: "add", content: "Uses React 18 with TypeScript", tags: ["project", "frontend", "react"], category: "tech")',
-                        'membrain(mode: "add", content: "API rate limit is 1000 requests/hour", tags: ["project", "api", "config"])',
-                        'membrain(mode: "add", content: "New fact", tags: ["scope.project"], ingestionScope: "scope\\\\.project")',
+                        'membrain(mode: "add", content: "User prefers dark mode", scope: ["scope.user", "type.preference", "domain.ui"])',
+                        'membrain(mode: "add", content: "Uses React 18 with TypeScript", scope: ["scope.project", "domain.frontend", "tech.react"], category: "tech")',
+                        'membrain(mode: "add", content: "API rate limit is 1000 requests/hour", scope: ["scope.project", "domain.api"])',
                       ],
                     },
                     {
                       command: "search",
-                      description: "Search memories by semantic similarity. responseFormat: raw (default), interpreted (LLM summary), or both. Use either keywordFilter OR scopeRegex (shared subgraph with ingest/traverse).",
-                      args: ["query (required)", "k? (default: 5)", "keywordFilter? (regex)", "scopeRegex? (single pattern)", "responseFormat? (raw|interpreted|both)"],
+                      description: "Search memories by semantic similarity. responseFormat: raw (default), interpreted (LLM summary), or both. Optional scope: regex patterns (AND across patterns).",
+                      args: ["query (required)", "k? (default: 5)", "scope? (string or string[] of regex patterns)", "responseFormat? (raw|interpreted|both)"],
                       examples: [
                         'membrain(mode: "search", query: "react components", k: 3)',
                         'membrain(mode: "search", query: "What does the user prefer?", responseFormat: "interpreted")',
-                        'membrain(mode: "search", query: "authentication methods", keywordFilter: "jwt|oauth", k: 5)',
-                        'membrain(mode: "search", query: "project facts", scopeRegex: "scope\\\\.project", k: 5)',
+                        'membrain(mode: "search", query: "authentication methods", scope: ["tech\\\\.(jwt|oauth)"], k: 5)',
+                        'membrain(mode: "search", query: "project facts", scope: ["scope\\\\.project"], k: 5)',
                         'membrain(mode: "search", query: "database options", responseFormat: "both")',
                       ],
                     },
                     {
                       command: "traverse",
-                      description: "Semantic graph traversal from a start memory along edges whose descriptions match the query (edge similarity threshold + hop limit). Optional scopeRegex on tags.",
-                      args: ["startMemoryId (required)", "query (required)", "maxHops? (1-5)", "edgeSimilarityThreshold? (0-1)", "scopeRegex?"],
+                      description: "Semantic graph traversal from a start memory along edges whose descriptions match the query (edge similarity threshold + hop limit). Optional scope filter (same AND regex semantics as search).",
+                      args: ["startMemoryId (required)", "query (required)", "maxHops? (1-5)", "edgeSimilarityThreshold? (0-1)", "scope?"],
                       examples: [
                         'membrain(mode: "traverse", startMemoryId: "abc-123", query: "authentication and authorization")',
                         'membrain(mode: "traverse", startMemoryId: "abc-123", query: "compliance", maxHops: 3, edgeSimilarityThreshold: 0.8)',
@@ -550,13 +531,13 @@ membrain(mode: "search", query: "design patterns I should know", keywordFilter: 
                     },
                     {
                       command: "delete",
-                      description: "Remove memory by ID OR by tags/category filters",
-                      args: ["memoryId?", "tags?", "category?"],
+                      description: "Remove memory by ID OR by scope/category filters (bulk delete)",
+                      args: ["memoryId?", "scope? (string or string[])", "category?"],
                       examples: [
                         'membrain(mode: "delete", memoryId: "abc-123")',
-                        'membrain(mode: "delete", tags: ["temp"])',
+                        'membrain(mode: "delete", scope: ["^temp$"])',
                         'membrain(mode: "delete", category: "draft")',
-                        'membrain(mode: "delete", tags: ["temp", "test"], category: "draft")',
+                        'membrain(mode: "delete", scope: ["temp", "test"], category: "draft")',
                       ],
                     },
                     {
@@ -579,9 +560,9 @@ membrain(mode: "search", query: "design patterns I should know", keywordFilter: 
                   ],
                   best_practices: [
                     "Use atomic notes (one fact per memory)",
-                    "Use descriptive tags: scope.X, type.Y, domain.Z",
+                    "Use descriptive scope tokens: scope.X, type.Y, domain.Z",
                     "Search before adding to avoid duplicates",
-                    "Use regex keywordFilter for precise filtering",
+                    "Use scope regex patterns (AND) to narrow search and bulk delete",
                     "Trust the Guardian to handle auto-linking",
                     "Clean up empty memories regularly",
                   ],
@@ -604,31 +585,25 @@ membrain(mode: "search", query: "design patterns I should know", keywordFilter: 
                   });
                 }
 
-                // Auto-add scope and temporal tags
-                const autoTags = [...(args.tags || [])];
-                const { project } = getTags(directory);
-                
-                // Add scope tag if not present
-                if (!autoTags.some(t => t.startsWith("scope."))) {
-                  autoTags.push("scope.project");
+                const autoScope = [...normalizeScopeArg(args.scope) ?? []];
+
+                if (!autoScope.some((t) => t.startsWith("scope."))) {
+                  autoScope.push("scope.project");
                 }
 
-                // Generate robust temporal tags in plugin to keep behavior deterministic.
                 const temporalTags = buildTemporalTags(new Date());
                 for (const temporalTag of temporalTags) {
-                  autoTags.push(temporalTag);
+                  autoScope.push(temporalTag);
                 }
-                
-                // Add type tag from category if provided
-                if (args.category && !autoTags.some(t => t.startsWith("type."))) {
-                  autoTags.push(`type.${args.category}`);
+
+                if (args.category && !autoScope.some((t) => t.startsWith("type."))) {
+                  autoScope.push(`type.${args.category}`);
                 }
 
                 const result = await membrainClient.addMemory(
                   sanitizedContent,
-                  [...new Set(autoTags)],
+                  [...new Set(autoScope)],
                   args.category,
-                  args.ingestionScope,
                 );
 
                 if (!result.success) {
@@ -643,7 +618,7 @@ membrain(mode: "search", query: "design patterns I should know", keywordFilter: 
                   message: "Memory stored successfully",
                   id: result.data?.id,
                   content: result.data?.content,
-                  tags: result.data?.tags,
+                  scope: result.data?.scope,
                   category: result.data?.category,
                   note: "Guardian will automatically link related memories",
                 });
@@ -665,9 +640,8 @@ membrain(mode: "search", query: "design patterns I should know", keywordFilter: 
                   envelope = await membrainClient.searchMemoriesResponse(
                     args.query,
                     k,
-                    args.keywordFilter,
                     responseFormat,
-                    args.scopeRegex,
+                    args.scope,
                   );
                 } catch (err) {
                   return JSON.stringify({
@@ -746,7 +720,7 @@ membrain(mode: "search", query: "design patterns I should know", keywordFilter: 
                       id: m.id,
                       content: m.content ? m.content.slice(0, 200) + (m.content.length > 200 ? "..." : "") : "[No content]",
                       similarity: m.semantic_score != null ? Math.round(m.semantic_score * 100) : 0,
-                      tags: m.tags || [],
+                      scope: m.scope || [],
                       type: "memory",
                     };
                   }
@@ -754,7 +728,7 @@ membrain(mode: "search", query: "design patterns I should know", keywordFilter: 
                     id: m.id,
                     content: `Relationship: ${m.description || "N/A"}`,
                     similarity: m.score != null ? Math.round(m.score * 100) : 0,
-                    tags: [],
+                    scope: [],
                     type: "relationship",
                     source: m.source?.content?.slice(0, 50),
                     target: m.target?.content?.slice(0, 50),
@@ -764,8 +738,7 @@ membrain(mode: "search", query: "design patterns I should know", keywordFilter: 
                 return JSON.stringify({
                   success: true,
                   query: args.query,
-                  keywordFilter: args.keywordFilter,
-                  scopeRegex: envelope.scope_regex ?? args.scopeRegex,
+                  scope: envelope.scope ?? normalizeScopeArg(args.scope) ?? null,
                   count: memories.length,
                   results: formattedResults,
                 });
@@ -785,7 +758,7 @@ membrain(mode: "search", query: "design patterns I should know", keywordFilter: 
                   {
                     maxHops: args.maxHops,
                     edgeSimilarityThreshold: args.edgeSimilarityThreshold,
-                    scopeRegex: args.scopeRegex,
+                    scope: args.scope,
                   },
                 );
 
@@ -843,7 +816,7 @@ membrain(mode: "search", query: "design patterns I should know", keywordFilter: 
                     memory: {
                       id: memory?.id,
                       content: memory?.content,
-                      tags: memory?.tags,
+                      scope: memory?.scope,
                       category: memory?.category,
                       version: memory?.version,
                       created_at: memory?.created_at,
@@ -874,12 +847,13 @@ membrain(mode: "search", query: "design patterns I should know", keywordFilter: 
               }
 
               case "delete": {
-                const hasFilter = args.tags || args.category;
+                const scopeFilter = normalizeScopeArg(args.scope);
+                const hasFilter = (scopeFilter && scopeFilter.length > 0) || args.category;
                 
                 if (!args.memoryId && !hasFilter) {
                   return JSON.stringify({
                     success: false,
-                    error: "memoryId, tags, or category parameter is required for delete mode",
+                    error: "memoryId, scope, or category parameter is required for delete mode",
                   });
                 }
 
@@ -898,7 +872,7 @@ membrain(mode: "search", query: "design patterns I should know", keywordFilter: 
                     message: `Memory ${args.memoryId} deleted`,
                   });
                 } else {
-                  const result = await membrainClient.deleteMemories(args.tags, args.category);
+                  const result = await membrainClient.deleteMemories(scopeFilter, args.category);
 
                   if (!result.success) {
                     return JSON.stringify({
@@ -927,12 +901,10 @@ membrain(mode: "search", query: "design patterns I should know", keywordFilter: 
                   // Only check memory nodes, skip relationship edges
                   if (m.type !== "memory_node") return false;
                   const content = m.content || "";
-                  const tags = m.tags || [];
-                  return !content || 
-                    content === "[No content]" || 
+                  return !content ||
+                    content === "[No content]" ||
                     content.trim() === "" ||
-                    content.length < 10 ||
-                    tags.length === 0;
+                    content.length < 10;
                 }) || [];
                 
                 if (dryRun) {
@@ -942,10 +914,10 @@ membrain(mode: "search", query: "design patterns I should know", keywordFilter: 
                     wouldDelete: emptyOrLowQuality.length,
                     memories: emptyOrLowQuality
                       .filter((m): m is import("./types/index.js").MemoryNodeResult => m.type === "memory_node")
-                      .map(m => ({ 
+                                           .map(m => ({ 
                         id: m.id, 
                         content: m.content?.slice(0, 100) || "[No content]",
-                        tags: m.tags || [],
+                        scope: m.scope || [],
                       })),
                     message: `Found ${emptyOrLowQuality.length} memories to delete. Run with dryRun: false to actually delete.`,
                   });
@@ -988,8 +960,8 @@ membrain(mode: "search", query: "design patterns I should know", keywordFilter: 
                   stats: {
                     total_memories: stats?.total_memories,
                     total_links: stats?.total_links,
-                    link_density: stats?.link_density,
-                    top_tags: stats?.tags?.slice(0, 10),
+                    avg_links_per_memory: stats?.avg_links_per_memory,
+                    top_scope: stats?.top_scope?.slice(0, 10),
                   },
                 });
               }

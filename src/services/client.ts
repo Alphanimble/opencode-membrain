@@ -48,17 +48,27 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function normalizeScopePatterns(scope?: string | string[]): string[] | undefined {
+  if (scope == null) return undefined;
+  if (Array.isArray(scope)) {
+    const out = scope.map((s) => String(s).trim()).filter(Boolean);
+    return out.length ? out : undefined;
+  }
+  const t = String(scope).trim();
+  return t ? [t] : undefined;
+}
+
 async function apiRequest<T>(endpoint: string, options: ApiRequestOptions = {}): Promise<MembrainResponse<T>> {
   // Get config at runtime
   const { MEMBRAIN_API_KEY, MEMBRAIN_API_URL } = getMembrainConfig();
-  
+
   if (!MEMBRAIN_API_URL) {
     return {
       success: false,
       error: "Mem-Brain API URL not configured",
     };
   }
-  
+
   const url = `${MEMBRAIN_API_URL}/api/v1${endpoint}`;
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -138,22 +148,21 @@ export const membrainClient = {
 
   async addMemory(
     content: string,
-    tags: string[] = [],
+    scope: string[] = [],
     category?: string,
-    ingestionScope?: string,
   ): Promise<MembrainResponse<Memory> & { action?: "created" | "updated" }> {
     const body: Record<string, unknown> = {
       content,
-      tags,
     };
-    
+
+    if (scope.length > 0) {
+      body.scope = scope;
+    }
+
     if (category) {
       body.category = category;
     }
-    if (ingestionScope && ingestionScope.trim()) {
-      body.ingestion_scope = ingestionScope.trim();
-    }
-    
+
     const accepted = await apiRequest<IngestJobAcceptedResponse>("/memories", {
       method: "POST",
       body,
@@ -167,9 +176,9 @@ export const membrainClient = {
     }
 
     const response = await this.waitForIngestJob(accepted.data.job_id);
-    
+
     log("addMemory", { success: response.success, id: response.data?.memory_id, action: response.data?.action, category });
-    
+
     return {
       success: response.success,
       data: response.data?.memory,
@@ -181,27 +190,15 @@ export const membrainClient = {
   async searchMemories(
     query: string,
     k: number = 5,
-    keywordFilter?: string | string[],
-    scopeRegex?: string,
+    scope?: string | string[],
   ): Promise<MembrainResponse<SearchResult[]>> {
-    const kwSet =
-      keywordFilter != null &&
-      (Array.isArray(keywordFilter) ? keywordFilter.length > 0 : String(keywordFilter).trim() !== "");
-    const scSet = scopeRegex != null && String(scopeRegex).trim() !== "";
-    if (kwSet && scSet) {
-      return {
-        success: false,
-        error: "Provide only one of keywordFilter or scopeRegex",
-      };
-    }
+    const patterns = normalizeScopePatterns(scope);
     const body: Record<string, unknown> = {
       query,
       k,
       response_format: "raw",
     };
-    const sr = scopeRegex?.trim();
-    if (sr) body.scope_regex = sr;
-    else if (keywordFilter) body.keyword_filter = keywordFilter;
+    if (patterns) body.scope = patterns;
 
     const response = await apiRequest<{ results: SearchResult[] }>(
       "/memories/search",
@@ -224,36 +221,23 @@ export const membrainClient = {
   async searchMemoriesResponse(
     query: string,
     k: number = 5,
-    keywordFilter?: string | string[],
     responseFormat: ResponseFormat = "raw",
-    scopeRegex?: string,
+    scope?: string | string[],
   ): Promise<SearchResponseEnvelope> {
-    const kwSet =
-      keywordFilter != null &&
-      (Array.isArray(keywordFilter) ? keywordFilter.length > 0 : String(keywordFilter).trim() !== "");
-    const scSet = scopeRegex != null && String(scopeRegex).trim() !== "";
-    if (kwSet && scSet) {
-      throw new Error("Provide only one of keywordFilter or scopeRegex");
-    }
+    const patterns = normalizeScopePatterns(scope);
     const body: Record<string, unknown> = {
       query,
       k,
       response_format: responseFormat,
     };
-
-    const sr = scopeRegex?.trim();
-    if (sr) {
-      body.scope_regex = sr;
-    } else if (keywordFilter) {
-      body.keyword_filter = keywordFilter;
-    }
+    if (patterns) body.scope = patterns;
 
     const response = await apiRequest<{
       count: number;
       results: SearchResult[];
       interpreted?: import("../types/index.js").InterpretedSummary;
       interpreted_error?: string;
-      scope_regex?: string | null;
+      scope?: string[] | null;
     }>("/memories/search", {
       method: "POST",
       body,
@@ -275,7 +259,7 @@ export const membrainClient = {
       results: response.data.results ?? [],
       interpreted: response.data.interpreted,
       interpreted_error: response.data.interpreted_error,
-      scope_regex: response.data.scope_regex,
+      scope: response.data.scope ?? undefined,
     };
   },
 
@@ -285,7 +269,7 @@ export const membrainClient = {
     options?: {
       maxHops?: number;
       edgeSimilarityThreshold?: number;
-      scopeRegex?: string;
+      scope?: string | string[];
     },
   ): Promise<
     MembrainResponse<{
@@ -301,8 +285,12 @@ export const membrainClient = {
       max_hops: String(options?.maxHops ?? 2),
       edge_similarity_threshold: String(options?.edgeSimilarityThreshold ?? 0.7),
     });
-    const scope = options?.scopeRegex?.trim();
-    if (scope) params.set("scope_regex", scope);
+    const patterns = normalizeScopePatterns(options?.scope);
+    if (patterns) {
+      for (const p of patterns) {
+        params.append("scope", p);
+      }
+    }
 
     const response = await apiRequest<{
       memories: unknown[];
@@ -328,9 +316,9 @@ export const membrainClient = {
     const response = await apiRequest<{ memory: Memory }>(`/memories/${memoryId}`, {
       method: "GET",
     });
-    
+
     log("getMemory", { success: response.success, id: memoryId });
-    
+
     // Extract memory from nested response
     return {
       success: response.success,
@@ -343,43 +331,46 @@ export const membrainClient = {
     const response = await apiRequest<void>(`/memories/${memoryId}`, {
       method: "DELETE",
     });
-    
+
     log("deleteMemory", { success: response.success, id: memoryId });
     return response;
   },
 
-  async deleteMemories(tags?: string[], category?: string): Promise<MembrainResponse<DeleteResult>> {
-    // Build query parameters for filter-based deletion
+  async deleteMemories(scope?: string[], category?: string): Promise<MembrainResponse<DeleteResult>> {
     const params = new URLSearchParams();
-    
-    if (tags && tags.length > 0) {
-      params.append("tags", tags.join(","));
+
+    if (scope && scope.length > 0) {
+      for (const p of scope) {
+        params.append("scope", p);
+      }
     }
-    
+
     if (category) {
       params.append("category", category);
     }
-    
+
     const queryString = params.toString();
-    const endpoint = queryString ? `/memories?${queryString}` : "/memories";
-    
+    const endpoint = queryString ? `/memories/bulk?${queryString}` : "/memories/bulk";
+
     const response = await apiRequest<{ deleted_count: number; memory_ids: string[] }>(endpoint, {
       method: "DELETE",
     });
-    
-    log("deleteMemories", { 
-      success: response.success, 
-      tags: tags?.join(','),
+
+    log("deleteMemories", {
+      success: response.success,
+      scope: scope?.join(","),
       category,
-      deletedCount: response.data?.deleted_count 
+      deletedCount: response.data?.deleted_count,
     });
-    
+
     return {
       success: response.success,
-      data: response.data ? {
-        deletedCount: response.data.deleted_count,
-        deletedIds: response.data.memory_ids,
-      } : undefined,
+      data: response.data
+        ? {
+            deletedCount: response.data.deleted_count,
+            deletedIds: response.data.memory_ids,
+          }
+        : undefined,
       error: response.error,
     };
   },
@@ -388,7 +379,7 @@ export const membrainClient = {
     const response = await apiRequest<MemoryStats>("/stats", {
       method: "GET",
     });
-    
+
     log("getStats", { success: response.success });
     return response;
   },

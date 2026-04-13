@@ -114,8 +114,8 @@ The `membrain` tool is available to the agent:
 
 | Mode | Args | Description |
 |------|------|-------------|
-| `add` | `content`, `tags?` | Store a new memory (Guardian decides update vs create) |
-| `search` | `query`, `k?`, `responseFormat?` (raw\|interpreted\|both) | Search memories with semantic similarity. Use `interpreted` for LLM summary, `both` for summary + evidence. |
+| `add` | `content`, `scope?`, `category?` | Store a new memory (Guardian decides update vs create). Optional `scope` tokens; plugin adds `scope.project` and temporal `time.*` tokens when needed. |
+| `search` | `query`, `k?`, `scope?`, `responseFormat?` (raw\|interpreted\|both) | Semantic search. Optional `scope`: regex pattern(s) with AND semantics. Use `interpreted` / `both` for LLM summary. |
 | `get` | `memoryId` | Retrieve a specific memory with its linked neighbors |
 | `delete` | `memoryId` | Delete a memory |
 | `stats` | - | View memory system statistics |

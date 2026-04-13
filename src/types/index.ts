@@ -5,8 +5,9 @@
 export interface Memory {
   id: string;
   content: string;
-  tags?: string[];
+  scope?: string[];
   category?: string;
+  links?: string[];
   embedding?: number[];
   evolution_history?: MemoryVersion[];
   linked_memories?: string[];
@@ -34,9 +35,7 @@ export interface LinkedMemory {
 export interface RelatedMemory {
   id: string;
   content: string;
-  context: string;
-  tags?: string[];
-  keywords?: string[];
+  scope?: string[];
 }
 
 // Memory node result from search
@@ -44,10 +43,8 @@ export interface MemoryNodeResult {
   type: "memory_node";
   id: string;
   content: string;
-  tags?: string[];
+  scope?: string[];
   category?: string;
-  context?: string;
-  keywords?: string[];
   semantic_score: number;
   related_memories?: RelatedMemory[];
 }
@@ -61,17 +58,13 @@ export interface RelationshipEdgeResult {
   source: {
     id: string;
     content: string;
-    context: string;
-    tags?: string[];
-    keywords?: string[];
+    scope?: string[];
     neighbors?: RelatedMemory[];
   };
   target: {
     id: string;
     content: string;
-    context: string;
-    tags?: string[];
-    keywords?: string[];
+    scope?: string[];
     neighbors?: RelatedMemory[];
   };
   is_edge_hit?: boolean;
@@ -100,8 +93,8 @@ export interface SearchResponseEnvelope {
   results: SearchResult[];
   interpreted?: InterpretedSummary;
   interpreted_error?: string;
-  /** Echoed when the request used scope_regex */
-  scope_regex?: string | null;
+  /** Echoed when the request included a non-empty scope filter */
+  scope?: string[] | null;
 }
 
 // Helper to check if result is a memory node
@@ -117,9 +110,8 @@ export function isRelationshipEdge(result: SearchResult): result is Relationship
 export interface MemoryStats {
   total_memories: number;
   total_links: number;
-  link_density: number;
-  tags: Array<{ tag: string; count: number }>;
-  top_keywords: Array<{ keyword: string; count: number }>;
+  avg_links_per_memory: number;
+  top_scope: Array<[string, number] | {0: string; 1: number }>;
 }
 
 export interface DeleteResult {
